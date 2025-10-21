@@ -109,18 +109,12 @@ def get_season_data(season):
     return merged
 
 
-def get_all_scores_data(start=1996, end=2025):
-    final_df = pd.DataFrame()
-    for season in tqdm(range(start, end + 1)):
-        try:
-            df = get_season_data(season)
-            final_df = pd.concat([final_df, df])
-        except Exception as e:
-            print(f"[warn] Skipping season {season}: {e}")
+def get_all_scores_data(season=2025):
+    existing_df = pd.read_csv('nba_game_scores_1946_2024.csv')
+    new_df = get_season_data(season)
 
-        # random delay to prevent triggering rate limit
-        sleep_time = 3 + random.random() * 2
-        time.sleep(sleep_time)
+    # concatenate preloaded dataframe with new data from this season
+    final_df = pd.concat([existing_df, new_df]).drop_duplicates(subset=['GAME_ID']).reset_index(drop=True)
 
     score_freq = final_df.pivot_table(
         index='PTS_L',
@@ -128,6 +122,7 @@ def get_all_scores_data(start=1996, end=2025):
         aggfunc='size',
         fill_value=0
     )
+    final_df.to_csv('nba_game_scores_1946_2024.csv', index=False)
     return score_freq, final_df
 
 def check_scorigami(pts_w, pts_l):
@@ -140,6 +135,7 @@ def check_scorigami(pts_w, pts_l):
         return f"The score combination {pts_w}-{pts_l} has occurred {freq} times. The last time it occurred was on {final_df[(final_df['PTS_W'] == pts_w) & (final_df['PTS_L'] == pts_l)]['GAME_DATE'].max()} when the {final_df[(final_df['PTS_W'] == pts_w) & (final_df['PTS_L'] == pts_l)]['TEAM_NAME_W'].values[0]} defeated the {final_df[(final_df['PTS_W'] == pts_w) & (final_df['PTS_L'] == pts_l)]['TEAM_NAME_L'].values[0]}."
 
 todays_date = pd.Timestamp.now().strftime("%Y%m%d")
+# todays_date = "20251017"
 print(todays_date)
 games_df = get_nba_games(todays_date)
 if not games_df.empty:
