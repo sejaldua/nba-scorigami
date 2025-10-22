@@ -6,9 +6,9 @@ import os
 import requests
 import pandas as pd
 from tqdm import tqdm
+import urllib
 from nba_api.stats.endpoints import leaguegamelog
 from requests.exceptions import ReadTimeout, RequestException
-
 
 load_dotenv()
 
@@ -110,7 +110,7 @@ def get_season_data(season):
 
 
 def get_all_scores_data(season=2025):
-    existing_df = pd.read_csv('nba_game_scores_1946_2024.csv')
+    existing_df = pd.read_csv('/home/sdua/nba-scorigami/nba_game_scores_1946_2024.csv')
     new_df = get_season_data(season)
 
     # concatenate preloaded dataframe with new data from this season
@@ -122,39 +122,62 @@ def get_all_scores_data(season=2025):
         aggfunc='size',
         fill_value=0
     )
-    final_df.to_csv('nba_game_scores_1946_2024.csv', index=False)
+    # final_df.to_csv('nba_game_scores_1946_2024.csv', index=False)
     return score_freq, final_df
 
-def check_scorigami(pts_w, pts_l):
+def check_scorigami(pts_w, pts_l, current_date):
     if pts_w <= pts_l:
         return "Invalid score combination: Winning points must be greater than losing points."
     freq = score_freq.at[pts_l, pts_w]
     if freq == 0:
         return f"Scorigami! The score combination {pts_w}-{pts_l} has never occurred."
     else:
-        return f"The score combination {pts_w}-{pts_l} has occurred {freq} times. The last time it occurred was on {final_df[(final_df['PTS_W'] == pts_w) & (final_df['PTS_L'] == pts_l)]['GAME_DATE'].max()} when the {final_df[(final_df['PTS_W'] == pts_w) & (final_df['PTS_L'] == pts_l)]['TEAM_NAME_W'].values[0]} defeated the {final_df[(final_df['PTS_W'] == pts_w) & (final_df['PTS_L'] == pts_l)]['TEAM_NAME_L'].values[0]}."
+        # Filter out today's games when finding last occurrence
+        historical_games = final_df[
+            (final_df['PTS_W'] == pts_w) & 
+            (final_df['PTS_L'] == pts_l) &
+            (final_df['GAME_DATE'] != current_date)
+        ]
+        
+        if historical_games.empty:
+            # This score has only occurred today (first time)
+            return f"Scorigami! The score combination {pts_w}-{pts_l} has never occurred before today."
+        else:
+            last_date = historical_games['GAME_DATE'].max()
+            last_game = historical_games[historical_games['GAME_DATE'] == last_date].iloc[-1]
+            return f"The score combination {pts_w}-{pts_l} has occurred {freq} times. The last time it occurred was on {last_date} when the {last_game['TEAM_NAME_W']} defeated the {last_game['TEAM_NAME_L']}."
 
-todays_date = pd.Timestamp.now().strftime("%Y%m%d")
-# todays_date = "20251017"
-print(todays_date)
-games_df = get_nba_games(todays_date)
-if not games_df.empty:
-    score_freq, final_df = get_all_scores_data()
-    for idx, row in games_df.iterrows():
-        # check if the game is final and the game has not been tweeted yet
-        with open("tweeted_games.txt", "a+") as f:
-            f.seek(0)
-            tweeted_games = f.read().splitlines()
-            game_identifier = f"{row['away_team']}@{row['home_team']} | {row['date']}"
-            if row['status'] == "Final" and game_identifier not in tweeted_games:
-                print("New final game found:", game_identifier)
-                result = check_scorigami(max(row['home_score'], row['away_score']), min(row['home_score'], row['away_score']))
-                tweet_text = (
-                    f"{row['away_team']} @ {row['home_team']}\n"
-                    f"Score: {row['away_score']} - {row['home_score']}\n\n"
-                    f"{result}"
-                )
-                post_tweet(tweet_text)
-                f.write(game_identifier + "\n")
-            elif game_identifier in tweeted_games:
-                print("Game already tweeted:", game_identifier)
+todays_date = pd.Timestamp.now()
+yesterdays_date = (pd.Timestamp.now() - pd.Timedelta(days=1))
+dates_to_run = [todays_date, yesterdays_date]
+for date in dates_to_run:
+    date_simple = date.strftime("%Y%m%d")
+    date_for_tweet = date.strftime("%B %d, %Y")
+    games_df = get_nba_games(date_simple)
+    if not games_df.empty:
+        score_freq, final_df = get_all_scores_data()
+        for idx, row in games_df.iterrows():
+            # check if the game is final and the game has not been tweeted yet
+            with open("/home/sdua/nba-scorigami/tweeted_games.txt", "a+") as f:
+                f.seek(0)
+                tweeted_games = f.read().splitlines()
+                game_identifier = f"{row['away_team']}@{row['home_team']} | {row['date']}"
+                if row['status'] == "Final" and game_identifier not in tweeted_games:
+                    print("New final game found:", game_identifier)
+                    # Convert today's date to GAME_DATE format (YYYY-MM-DD or similar)
+                    current_game_date = pd.Timestamp(date_simple).strftime("%Y-%m-%d")
+                    result = check_scorigami(
+                        max(row['home_score'], row['away_score']), 
+                        min(row['home_score'], row['away_score']),
+                        current_game_date
+                    )
+                    tweet_text = (
+                        f"{date_for_tweet}\n"
+                        f"{row['away_team']} @ {row['home_team']}\n"
+                        f"Score: {row['away_score']} - {row['home_score']}\n\n"
+                        f"{result}"
+                    )
+                    post_tweet(tweet_text)
+                    f.write(game_identifier + "\n")
+                elif game_identifier in tweeted_games:
+                    print("Game already tweeted:", game_identifier)
